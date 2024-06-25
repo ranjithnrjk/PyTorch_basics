@@ -1,0 +1,70 @@
+seed: 42
+gpus:
+  num_gpus: -1
+paths:
+  data_path: /home/ranjith/data
+  meta_path: /home/ranjith/d4ai/ranjith_projects/interior_classification/meta_data
+  cars_train_path: /home/ranjith/d4ai/ranjith_projects/interior_classification/meta_data/train_sampled.csv
+  cars_val_path: /home/ranjith/d4ai/ranjith_projects/interior_classification/meta_data/val.csv
+  cars_test_path: /home/ranjith/d4ai/ranjith_projects/interior_classification/meta_data/test.csv
+  models_dir: /home/ranjith/d4ai/ranjith_projects/interior_classification/models/PartiallyCorrected
+wandb:
+  project: interior_classification
+  experiment_name: MobileNetV3_large_49_classes_partially_modified_dataset_190624
+  run_name: interior_classification
+  dry_run: false
+  save_dir: /home/ranjith/d4ai/ranjith_projects/interior_classification/wandb
+model:
+  model: mobilenetv3_large_100.ra_in1k
+  resume: false
+  pretrained: true
+  num_classes: 49
+  checkpt_path:
+  unfreeze_blocks: false
+  no_unfreeze_blocks: 2
+  dropout_rate: 0.45
+optimizer_params:
+  optimizer: AdamW
+  learning_rate: 5.0e-05
+  momentum: 0.9
+  weight_decay: 1.0e-02
+  beta1: 0.9
+  beta2: 0.999
+scheduler_params:
+  scheduler: ReduceLROnPlateau
+  tmax: 30
+  eta_min: 5.0e-06
+  metric: test_f1
+  mode: max
+  factor: 0.95
+  patience: 2
+loss_function:
+  loss_function: cross_entropy
+  label_smoothing: 0.1
+train:
+  num_gpus: -1
+  batch_size: 16
+  num_workers: 1
+  grad_clip: 0.1
+  epochs: 30
+  start_iter: 0
+  early_stop_patience: 5
+  early_stop_threshold: 0.001
+  checkpoint_period: 5
+  metric_threshold: 0.95
+swa:
+  swa_epoch_start: 0.75
+data_transforms:
+  image_size: 300
+  test_image_size: 384
+  image_channels: 3
+  means:
+    - 0.485
+    - 0.456
+    - 0.406
+  stds:
+    - 0.229
+    - 0.224
+    - 0.225
+  scale: 1.1
+  auto_augment: rand-m7-n4-mstd0.5-inc1
