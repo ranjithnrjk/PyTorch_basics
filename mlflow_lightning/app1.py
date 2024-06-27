@@ -1,26 +1,16 @@
 # Import Libraries
 import torch
-import os
 import yaml
-import mlflow   
-import lightning.pytorch as pl
-from argparse import ArgumentParser
-from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.callbacks import LearningRateMonitor
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+import mlflow
+from lightning import Trainer
+import lightning as L
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.loggers import MLFlowLogger
 import torchmetrics
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms, datasets
 from typing import Dict, Any
-from utility import get_optimizer, get_scheduler
-
-# Create a data module class
-import lightning as L
-from torch.utils.data import DataLoader, random_split
-from torchvision import datasets, transforms
-from typing import Dict, Any
-from lightning.pytorch.loggers import MLFlowLogger
 
 class MnistDataModule(L.LightningDataModule):
     def __init__(self, config: Dict[str, Any]):
@@ -39,7 +29,7 @@ class MnistDataModule(L.LightningDataModule):
         
         if stage == 'test' or stage is None:
             self.df_test = datasets.MNIST('data', train=False, download=True, transform=self.transforms)
-
+    
     def create_data_loader(self, dataset):
         return DataLoader(
             dataset, batch_size=self.config['train']['batch_size'], 
@@ -214,36 +204,32 @@ if __name__ == "__main__":
     # Load configuration from YAML file
     with open('config.yaml', 'r') as file:
         config = yaml.safe_load(file)
-    
-    mlflow.pytorch.autolog()
 
     dm = MnistDataModule(config)
     model = LightningMNISTClassifier(config)
 
-    dm.setup(stage='fit')
-
     early_stopping = EarlyStopping(
         monitor=config['train']['es_monitor'],
-        mode = config['train']['es_mode'],
+        mode=config['train']['es_mode'],
         patience=config['train']['es_patience'],
         verbose=config['train']['es_verbose'],
     )
 
     checkpoint_callback = ModelCheckpoint(
-                monitor='val_loss',
-                dirpath='models',
-                filename='mnist-{epoch:02d}-{val_loss:.2f}',
-                save_top_k=3,
-                mode='min',
-            )
-    # Initialize MLFlow Logger``
+        monitor='val_loss',
+        dirpath='models',
+        filename='mnist-{epoch:02d}-{val_loss:.2f}',
+        save_top_k=3,
+        mode='min',
+    )
+    
     mlf_logger = MLFlowLogger(experiment_name="MNIST_Experiment")
 
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    trainer = L.Trainer(
+    trainer = Trainer(
         max_epochs=3,
-        callbacks=[checkpoint_callback, lr_monitor],
+        callbacks=[checkpoint_callback, lr_monitor, early_stopping],
         logger=mlf_logger
     )
 
