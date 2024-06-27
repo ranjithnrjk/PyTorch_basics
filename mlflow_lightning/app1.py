@@ -57,7 +57,7 @@ class MnistDataModule(L.LightningDataModule):
 
 
 # Create a model class
-class LightningMNISTClassifier(pl.LightningModule):
+class LightningMNISTClassifier(L.LightningModule):
     def __init__(self, config: Dict[str, Any]):
         """
         :param config: Configuration dictionary containing:
