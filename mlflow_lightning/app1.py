@@ -1,8 +1,9 @@
 # Import Libraries
 import torch
 import os
+import yaml
 import mlflow   
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from argparse import ArgumentParser
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -12,67 +13,47 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms, datasets
 from typing import Dict, Any
+from utility import get_optimizer, get_scheduler
 
 # Create a data module class
-class MnistDataModule(pl.LightningDataModule):
+import lightning as L
+from torch.utils.data import DataLoader, random_split
+from torchvision import datasets, transforms
+from typing import Dict, Any
+
+class MnistDataModule(L.LightningDataModule):
     def __init__(self, config: Dict[str, Any]):
-        """
-        Initialization of Inherited LightningDataModule
-        """
         super(MnistDataModule, self).__init__()
-        self.df_train = None
-        self.df_val = None
-        self.df_test = None
-        self.train_data_loader = None
-        self.val_data_loader = None
-        self.test_data_loader = None
         self.config = config
 
-        # transforms for images
+        # Transforms for images
         self.transforms = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
         )
 
     def setup(self, stage=None):
-        """
-        Downloads the data, splits it into train, validation and test_sets
-        :param stage: Stage - training or testing
-        """
-        self.df_train = datasets.MNIST('data', train=True, download=True, transform=self.transforms)
+        if stage == 'fit' or stage is None:
+            mnist_full = datasets.MNIST('data', train=True, download=True, transform=self.transforms)
+            self.df_train, self.df_val = random_split(mnist_full, [55000, 5000])
+        
+        if stage == 'test' or stage is None:
+            self.df_test = datasets.MNIST('data', train=False, download=True, transform=self.transforms)
 
-        self.df_train, self.df_val = random_split(self.df_train, [55000, 5000])
-
-        self.df_test = datasets.MNIST('data', train=False, download=True, transform=self.transforms)
-
-
-    def create_data_loader(self, df):
-        """
-        Generic dataloader function
-        :param df: Input Tensor
-        :return: returns the constructed dataloader
-        """
+    def create_data_loader(self, dataset):
         return DataLoader(
-            df, batch_size=self.config['train']['batch_size'], 
+            dataset, batch_size=self.config['train']['batch_size'], 
             num_workers=self.config['train']['num_workers']
         )
     
     def train_dataloader(self):
-        """
-        : return : output - train dataloader for the given dataset
-        """
         return self.create_data_loader(self.df_train)
     
     def val_dataloader(self):
-        """
-        :return: output - validation dataloader for the given dataset
-        """
         return self.create_data_loader(self.df_val)
 
     def test_dataloader(self):
-        """
-        :return: output - test dataloader for the given dataset
-        """
         return self.create_data_loader(self.df_test)
+
 
 # Create a model class
 class LightningMNISTClassifier(pl.LightningModule):
@@ -92,16 +73,14 @@ class LightningMNISTClassifier(pl.LightningModule):
         self.layer2 = torch.nn.Linear(128, 256)
         self.layer3 = torch.nn.Linear(256, 10)
 
-    
-    
     def forward(self, x):
         """
         :param x: input features
-        "return: output - mnist digit label for the input image
+        :return: output - mnist digit label for the input image
         """
         batch_size = x.size()[0]
 
-        x = x.view(batch_size, -1) # (b, 1, 28, 28) -> (b, 1*28*28)
+        x = x.view(batch_size, -1)  # (b, 1, 28, 28) -> (b, 1*28*28)
 
         # Layer 1 (b, 128) -> (b, 128)
         x = self.layer1(x)
@@ -117,7 +96,7 @@ class LightningMNISTClassifier(pl.LightningModule):
         # Probability distribution over labels
         x = torch.log_softmax(x, dim=1)
         return x
-    
+
     def cross_entropy_loss(self, logits, labels):
         """"
         Initializes the loss function
@@ -137,8 +116,11 @@ class LightningMNISTClassifier(pl.LightningModule):
         x, y = train_batch
         logits = self.forward(x)
         loss = self.cross_entropy_loss(logits, y)
-        return {'loss': loss}
-    
+        
+        # Logging the training loss
+        self.log('train_loss', loss)
+        return loss
+
     def validation_step(self, val_batch, batch_idx):
         """
         Performs validation of data in batches 
@@ -151,18 +133,21 @@ class LightningMNISTClassifier(pl.LightningModule):
         x, y = val_batch
         logits = self.forward(x)
         loss = self.cross_entropy_loss(logits, y)
+        
+        # Logging the validation loss
+        self.log('val_loss', loss, prog_bar=True)
         return {'val_loss': loss}
-    
-    def validation_epoch_end(self, outputs):
+
+    def on_validation_epoch_end(self):
         """
         Computes average validation loss over an epoch
-
-        :param outputs: Output after every epoch end
-
-        :return: output - average validation loss
         """
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        self.log('avg_val_loss', avg_loss, sync_dist=True)
+        if 'val_loss' in self.trainer.callback_metrics:
+            avg_loss = self.trainer.callback_metrics['val_loss']
+            # Logging the average validation loss
+            self.log('avg_val_loss', avg_loss, sync_dist=True) 
+        else:
+            print("val_loss not found in callback_metrics")
 
     def test_step(self, test_batch, batch_idx):
         """
@@ -174,99 +159,88 @@ class LightningMNISTClassifier(pl.LightningModule):
         :return: output - test loss
         """
         x, y = test_batch
-        outputs = self.forward(x)
-        _, y_hat = torch.max(outputs, dim=1)
+        logits = self.forward(x)
+        loss = self.cross_entropy_loss(logits, y)
+        _, y_hat = torch.max(logits, dim=1)
         accuracy = torchmetrics.Accuracy(task="multiclass", num_classes=10)
         test_acc = accuracy(y_hat.cpu(), y.cpu())
-        return {'test_acc': test_acc}
-    
-    def test_epoch_end(self, outputs):
-        """
-        Computes average test accuracy over an epoch
+        
+        # Logging the test loss and test accuracy
+        self.log('test_loss', loss, prog_bar=True)
+        self.log('test_acc', test_acc, prog_bar=True)
+        return {'test_loss': loss, 'test_acc': test_acc}
 
-        :param outputs: Output after every epoch end
-
-        :return: output - average test accuracy
+    def on_test_epoch_end(self):
         """
-        avg_test_acc = torch.stack([x['test_acc'] for x in outputs]).mean()
-        self.log('avg_test_acc', avg_test_acc, sync_dist=True)
+        Computes average test loss over an epoch
+        """
+        if 'test_loss' in self.trainer.callback_metrics:
+            avg_test_loss = self.trainer.callback_metrics['test_loss']
+            # Logging the average test loss
+            self.log('avg_test_loss', avg_test_loss, sync_dist=True) 
+        else:
+            print("test_loss not found in callback_metrics")
 
     def configure_optimizers(self):
         """
         Initializes the optimizer and learning rate scheduler
 
-        :return : output - optimizer and learning rate scheduler
+        :return: output - optimizer and learning rate scheduler
         """
-        self.optimizer = torch.optim.Adam(self.parameters(), lr = self.config['lr'])
+        optimizer = torch.optim.Adam(self.parameters(), 
+                                     lr=self.config['optimizer_params']['learning_rate'])
 
-        self.scheduler = {
-            'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer, mode=self.config['scheduler_params']['mode'], 
-                patience=self.config['scheduler_params']['patience'], 
-                verbose=True, factor=self.config['scheduler_params']['factor'], 
-                min_lr=1e-6
-            ),
-            'monitor': self.config['scheduler_params']['metric'],
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', 
+        factor=0.1, patience=2, verbose=True)
+        
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'monitor': self.config['scheduler_params']['metric'],
+                'interval': 'epoch',
+                'frequency': 1,
+            }
         }
-        return [self.optimizer], [self.scheduler]
+    
+    def on_fit_start(self):
+        mlflow.pytorch.autolog()
+    
+
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="PyTorch Lightning MNIST Example")
 
-    parser.add_argument(
-        "--es_monitor", type=str, default='val_loss', help='Early stopping monitor parameter'
-    )
-
-    parser.add_argument(
-        "--es_mode", type=str, default='min', help='Early stopping mode parameter'
-    )
-
-    parser.add_argument(
-        "--es_patience", type=int, default=2, help='Early stopping patience parameter'
-    )
-
-    parser.add_argument(
-        "--es_verbose", type=bool, default=True, help='Early stopping verbose parameter'
-    )
-
-    parser = pl.Trainer.add_argparse_args(parent_parser=parser)
-    parser = LightningMNISTClassifier.add_model_specific_args(parent_parser=parser)
-
+    # Load configuration from YAML file
+    with open('config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+    
     mlflow.pytorch.autolog()
 
-    args = parser.parse_args()
-    dict_args = vars(args)
+    dm = MnistDataModule(config)
+    model = LightningMNISTClassifier(config)
 
-    if "accelerator" in dict_args:
-        if dict_args["accelerator"] == "None":
-            dict_args["accelerator"] = None
-
-    model = LightningMNISTClassifier(**dict_args)
-
-    dm = MnistDataModule(**dict_args)
-    dm.prepare_data()
     dm.setup(stage='fit')
 
     early_stopping = EarlyStopping(
-        monitor=dict_args['es_monitor'],
-        mode = dict_args['es_mode'],
-        patience=dict_args['es_patience'],
-        verbose=dict_args['es_verbose'],
+        monitor=config['train']['es_monitor'],
+        mode = config['train']['es_mode'],
+        patience=config['train']['es_patience'],
+        verbose=config['train']['es_verbose'],
     )
 
     checkpoint_callback = ModelCheckpoint(
-        filepath=os.getcwd(),
-        save_top_k=1,
-        verbose=True,
-        monitor='val_loss',
-        mode='min',
-        prefix=""
-    )
+                monitor='val_loss',
+                dirpath='models',
+                filename='mnist-{epoch:02d}-{val_loss:.2f}',
+                save_top_k=3,
+                mode='min',
+            )
 
-    lr_logger = LearningRateMonitor()
+    lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    trainer = pl.Trainer.add_argparse_args(
-        args, callbacks=[early_stopping, lr_logger], checkpoint_callback=checkpoint_callback
+    trainer = pl.Trainer(
+        max_epochs=3,
+        callbacks=[checkpoint_callback, lr_monitor]
     )
 
     trainer.fit(model=model, datamodule=dm)
