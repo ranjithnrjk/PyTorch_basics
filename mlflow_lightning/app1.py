@@ -20,6 +20,7 @@ import lightning as L
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
 from typing import Dict, Any
+from lightning.pytorch.loggers import MLFlowLogger
 
 class MnistDataModule(L.LightningDataModule):
     def __init__(self, config: Dict[str, Any]):
@@ -235,13 +236,16 @@ if __name__ == "__main__":
                 save_top_k=3,
                 mode='min',
             )
+    # Initialize MLFlow Logger``
+    mlf_logger = MLFlowLogger(experiment_name="MNIST_Experiment")
 
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    trainer = pl.Trainer(
+    trainer = L.Trainer(
         max_epochs=3,
-        callbacks=[checkpoint_callback, lr_monitor]
+        callbacks=[checkpoint_callback, lr_monitor],
+        logger=mlf_logger
     )
 
-    trainer.fit(model=model, datamodule=dm)
-    trainer.test()
+    trainer.fit(model, datamodule=dm)
+    trainer.test(model, datamodule=dm)
