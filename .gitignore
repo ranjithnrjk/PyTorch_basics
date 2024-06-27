@@ -1,2 +1,4 @@
 data
 lightning_logs
+mlflow_lightning/__pycache__/
+mlflow_lightning/mlruns/
