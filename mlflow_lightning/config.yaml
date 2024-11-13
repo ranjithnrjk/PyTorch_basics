@@ -34,7 +34,7 @@ train:
   early_stop_threshold: 0.001
   checkpoint_period: 5
   metric_threshold: 0.95
-  es_monitor: val_acc
+  es_monitor: val_loss
   es_mode: max
   es_patience: 2
   es_verbose: true
